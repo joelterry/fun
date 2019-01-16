@@ -13,46 +13,55 @@ func isError(t reflect.Type) bool {
 }
 
 func trimPkg(s string) string {
-	dot := -1
 	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == '.' {
-			if dot == -1 {
-				dot = i
-			} else {
-				return s[i+1:]
-			}
+		if s[i] == '/' {
+			s = s[i+1:]
+			break
 		}
 	}
-	if dot == -1 {
-		return s
+	dot := -1
+	for i := len(s) - 1; i >= 0; i-- {
+		c := s[i]
+		if c != '.' {
+			continue
+		}
+		if dot == -1 {
+			dot = i
+			continue
+		}
+		return s[i+1:]
 	}
 	return s[dot+1:]
 }
 
 func Test(t *testing.T, fun interface{}) *FunTest {
+	ft := &FunTest{
+		t: t,
+	}
+
+	if fun == nil {
+		fmt.Printf("Test: 'fun' value passed to Test is nil")
+		t.Fail()
+		return ft
+	}
+
 	val := reflect.ValueOf(fun)
 	typ := val.Type()
-	valid := typ.Kind() == reflect.Func
-	errors := false
-	var name string
-	if valid {
-		numOut := typ.NumOut()
-		errors = numOut > 0 && isError(typ.Out(numOut-1))
-		name = trimPkg(runtime.FuncForPC(val.Pointer()).Name())
-	} else {
+	if typ.Kind() != reflect.Func {
 		fmt.Printf("Test: 'fun' value passed to Test isn't a func: %v\n", fun)
 		t.Fail()
+		return ft
 	}
-	return &FunTest{
-		t:      t,
-		fun:    fun,
-		val:    val,
-		typ:    typ,
-		valid:  valid,
-		errors: errors,
-		name:   name,
-		i:      0,
-	}
+
+	ft.val = val
+	ft.typ = typ
+	ft.name = trimPkg(runtime.FuncForPC(val.Pointer()).Name())
+	ft.valid = true
+
+	numOut := typ.NumOut()
+	ft.errors = numOut > 0 && isError(typ.Out(numOut-1))
+
+	return ft
 }
 
 func (ft *FunTest) In(args ...interface{}) Case {
@@ -69,7 +78,7 @@ func (c Case) Out(results ...interface{}) (ret *FunTest) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			c.println(r)
+			c.println("panic: ", r)
 			c.ft.t.Fail()
 		}
 	}()
@@ -178,7 +187,6 @@ func (c Case) Panic() (ret *FunTest) {
 
 type FunTest struct {
 	t      *testing.T
-	fun    interface{}
 	val    reflect.Value
 	typ    reflect.Type
 	valid  bool
