@@ -3,7 +3,7 @@ package fun
 import (
 	"fmt"
 	"reflect"
-	"strconv"
+	"runtime"
 	"testing"
 )
 
@@ -12,36 +12,56 @@ func isError(t reflect.Type) bool {
 	return t.Implements(errInterface)
 }
 
-func Test(t *testing.T, fun interface{}) FunTest {
+func trimPkg(s string) string {
+	dot := -1
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == '.' {
+			if dot == -1 {
+				dot = i
+			} else {
+				return s[i+1:]
+			}
+		}
+	}
+	if dot == -1 {
+		return s
+	}
+	return s[dot+1:]
+}
+
+func Test(t *testing.T, fun interface{}) *FunTest {
 	val := reflect.ValueOf(fun)
 	typ := val.Type()
 	valid := typ.Kind() == reflect.Func
 	errors := false
+	var name string
 	if valid {
 		numOut := typ.NumOut()
 		errors = numOut > 0 && isError(typ.Out(numOut-1))
+		name = trimPkg(runtime.FuncForPC(val.Pointer()).Name())
 	} else {
-		fmt.Println("Test: 'fun' value passed to Test isn't a func")
+		fmt.Printf("Test: 'fun' value passed to Test isn't a func: %v\n", fun)
 		t.Fail()
 	}
-	return FunTest{
+	return &FunTest{
 		t:      t,
 		fun:    fun,
 		val:    val,
 		typ:    typ,
 		valid:  valid,
 		errors: errors,
-		i:      1,
+		name:   name,
+		i:      0,
 	}
 }
 
-func (ft FunTest) In(args ...interface{}) Case {
+func (ft *FunTest) In(args ...interface{}) Case {
+	ft.i++
 	return Case{ft, args}
 }
 
-func (c Case) Out(results ...interface{}) (ret FunTest) {
+func (c Case) Out(results ...interface{}) (ret *FunTest) {
 	ret = c.ft
-	ret.i++
 
 	if !c.ft.valid {
 		return
@@ -91,9 +111,8 @@ func (c Case) Out(results ...interface{}) (ret FunTest) {
 	return
 }
 
-func (c Case) Err() (ret FunTest) {
+func (c Case) Err() (ret *FunTest) {
 	ret = c.ft
-	ret.i++
 
 	if !c.ft.valid {
 		return
@@ -134,9 +153,8 @@ func (c Case) Err() (ret FunTest) {
 	return
 }
 
-func (c Case) Panic() (ret FunTest) {
+func (c Case) Panic() (ret *FunTest) {
 	ret = c.ft
-	ret.i++
 
 	if !c.ft.valid {
 		return
@@ -165,20 +183,21 @@ type FunTest struct {
 	typ    reflect.Type
 	valid  bool
 	errors bool
+	name   string
 	i      int
 }
 
 type Case struct {
-	ft   FunTest
+	ft   *FunTest
 	args []interface{}
 }
 
 func (c Case) println(a ...interface{}) {
-	fmt.Print("Case ", strconv.Itoa(c.ft.i), ": ")
+	fmt.Printf("(%s) Case %d: ", c.ft.name, c.ft.i)
 	fmt.Println(a...)
 }
 
 func (c Case) printf(format string, a ...interface{}) {
-	fmt.Print("Case ", strconv.Itoa(c.ft.i), ": ")
+	fmt.Printf("(%s) Case %d: ", c.ft.name, c.ft.i)
 	fmt.Printf(format, a...)
 }
