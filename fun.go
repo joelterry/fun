@@ -1,3 +1,50 @@
+/*
+Package fun is a library for quickly testing functions.
+
+Example:
+
+	package example
+
+	import (
+		"errors"
+		"testing"
+
+		"github.com/joelterry/fun"
+	)
+
+	func foo(s string) (string, error) {
+		if len(s) == 0 {
+			panic("expected non-empty string")
+		}
+		if s[0:3] == "foo" {
+			return "", errors.New("you can't foo a foo")
+		}
+		return s + " foo", nil
+	}
+
+	func TestAdd(t *testing.T) {
+
+		f := fun.Test(t, foo)
+		f.In("bar").Out("bar foo", nil)
+		f.In("foo").Err()
+		f.In("").Panic()
+
+		// You can optionally chain the test cases, leave off the last return
+		// value if you expect a nil error, and test for specific error/panic values.
+
+		fun.Test(t, foo).
+			In("bar").Out("bar foo").
+			In("foo").Err(errors.New("you can't foo a foo")).
+			In("").Panic("expected non-empty string")
+
+		// As shorthand you can call Err(nil) to check that an error wasn't returned.
+		// You can't do the same for Panic, since nil panic values are possible.
+
+		fun.Test(t, foo).In("bar").Err(nil)
+		fun.Test(t, foo).In("bar").Panic(nil) // fails
+	}
+
+*/
 package fun
 
 import (
@@ -34,7 +81,17 @@ func trimPkg(s string) string {
 	return s[dot+1:]
 }
 
+// Test is the entry point for testing a function.
+// fun must be a func.
 func Test(t *testing.T, fun interface{}) *FunTest {
+	return test(t, fun)
+}
+
+type failer interface {
+	Fail()
+}
+
+func test(t failer, fun interface{}) *FunTest {
 	ft := &FunTest{
 		t: t,
 	}
@@ -64,11 +121,19 @@ func Test(t *testing.T, fun interface{}) *FunTest {
 	return ft
 }
 
+// In is where you pass in the arguments you want to test.
+//
+// It can either be called from the value returned by Test, or after Out/Err/Panic in a chain.
 func (ft *FunTest) In(args ...interface{}) Case {
 	ft.i++
 	return Case{ft, args}
 }
 
+// Out is where you pass in the return variables that you expect.
+//
+// It should follow In() in a call chain.
+//
+// If the last return type is an error, and you expect it to be nil, you may leave it out.
 func (c Case) Out(results ...interface{}) (ret *FunTest) {
 	ret = c.ft
 
@@ -120,10 +185,20 @@ func (c Case) Out(results ...interface{}) (ret *FunTest) {
 	return
 }
 
-func (c Case) Err() (ret *FunTest) {
+// Err should be called instead of Out if you just want to check for an error. This is only valid if the tested
+// function's final return value is an error.
+//
+// You can optionally pass in an error if you're expecting something specific.
+func (c Case) Err(v ...interface{}) (ret *FunTest) {
 	ret = c.ft
 
 	if !c.ft.valid {
+		return
+	}
+
+	if !c.ft.errors {
+		c.println("Err() called with a func that doesn't error")
+		c.ft.t.Fail()
 		return
 	}
 
@@ -148,13 +223,22 @@ func (c Case) Err() (ret *FunTest) {
 
 	last := resVals[len(resVals)-1].Interface()
 	err, ok := last.(error)
+	if err == nil {
+		if len(v) > 0 && v[0] == nil {
+			return
+		}
+		c.println("returned error was not nil")
+		c.ft.t.Fail()
+		return
+	}
 	if !ok {
 		c.println("last return value was not an error")
 		c.ft.t.Fail()
 		return
 	}
-	if err == nil {
-		c.println("returned error was nil")
+
+	if len(v) > 0 && !reflect.DeepEqual(v[0], last) {
+		c.printf("wrong error: expected %v, but got %v\n", v[0], last)
 		c.ft.t.Fail()
 		return
 	}
@@ -162,15 +246,30 @@ func (c Case) Err() (ret *FunTest) {
 	return
 }
 
-func (c Case) Panic() (ret *FunTest) {
+// Panic should be called instead of Out if you want to check that a panic occured.
+//
+// You can optionally pass in a value if you're expecting something specific.
+func (c Case) Panic(v ...interface{}) (ret *FunTest) {
 	ret = c.ft
 
 	if !c.ft.valid {
 		return
 	}
 
+	didPanic := true
+
 	defer func() {
-		recover()
+		if !didPanic {
+			return
+		}
+		r := recover()
+		if len(v) == 0 {
+			return
+		}
+		if !reflect.DeepEqual(v[0], r) {
+			c.printf("wrong panic value: expected %v, but got %v\n", v[0], r)
+			c.ft.t.Fail()
+		}
 	}()
 
 	argVals := make([]reflect.Value, len(c.args))
@@ -179,14 +278,16 @@ func (c Case) Panic() (ret *FunTest) {
 	}
 	c.ft.val.Call(argVals)
 
+	didPanic = false
 	c.println("function was called successfully, expected to panic")
 	c.ft.t.Fail()
 
 	return
 }
 
+// FunTest contains the In method, and can be ignored as a type.
 type FunTest struct {
-	t      *testing.T
+	t      failer
 	val    reflect.Value
 	typ    reflect.Type
 	valid  bool
@@ -195,6 +296,7 @@ type FunTest struct {
 	i      int
 }
 
+// Case contains the Out/Err/Panic methods, and can be ignored as a type.
 type Case struct {
 	ft   *FunTest
 	args []interface{}
